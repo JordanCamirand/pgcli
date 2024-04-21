@@ -34,6 +34,10 @@ Example if current working directory was `/Users/jordan/code/web` :
 
 `db --project=catapult` to open up the CLI with <local_catapult_postgres_db_string>
 
+### Configuration
+
+update `EDITOR_COMMAND` in `pgcli/main.py` to be whatever editor you like ex: vim
+
 
 ### Misc
 
