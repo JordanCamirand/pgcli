@@ -9,7 +9,7 @@ from prompt_toolkit.filters import (
     vi_mode,
 )
 
-from .pgbuffer import buffer_should_be_handled, safe_multi_line_mode
+from pgcli.pgbuffer import buffer_should_be_handled, safe_multi_line_mode
 
 _logger = logging.getLogger(__name__)
 

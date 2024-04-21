@@ -9,7 +9,7 @@ import psycopg.sql
 from psycopg.conninfo import make_conninfo
 import sqlparse
 
-from .packages.parseutils.meta import FunctionMetadata, ForeignKey
+from pgcli.packages.parseutils.meta import FunctionMetadata, ForeignKey
 
 _logger = logging.getLogger(__name__)
 

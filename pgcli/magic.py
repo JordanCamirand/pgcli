@@ -1,4 +1,4 @@
-from .main import PGCli
+from pgcli.main import PGCli
 import sql.parse
 import sql.connection
 import logging

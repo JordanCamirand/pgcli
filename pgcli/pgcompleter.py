@@ -8,7 +8,7 @@ from cli_helpers.tabular_output import TabularOutputFormatter
 from pgspecial.namedqueries import NamedQueries
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
-from .packages.sqlcompletion import (
+from pgcli.packages.sqlcompletion import (
     FromClauseItem,
     suggest_type,
     Special,
@@ -27,12 +27,12 @@ from .packages.sqlcompletion import (
     JoinCondition,
     Join,
 )
-from .packages.parseutils.meta import ColumnMetadata, ForeignKey
-from .packages.parseutils.utils import last_word
-from .packages.parseutils.tables import TableReference
-from .packages.pgliterals.main import get_literals
-from .packages.prioritization import PrevalenceCounter
-from .config import load_config, config_location
+from pgcli.packages.parseutils.meta import ColumnMetadata, ForeignKey
+from pgcli.packages.parseutils.utils import last_word
+from pgcli.packages.parseutils.tables import TableReference
+from pgcli.packages.pgliterals.main import get_literals
+from pgcli.packages.prioritization import PrevalenceCounter
+from pgcli.config import load_config, config_location
 
 _logger = logging.getLogger(__name__)
 

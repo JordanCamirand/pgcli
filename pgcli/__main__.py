@@ -2,7 +2,7 @@
 pgcli package main entry point
 """
 
-from .main import cli
+from pgcli.main import cli
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 import sys
 import click
-from .parseutils import is_destructive
+from pgcli.packages.parseutils import is_destructive
 
 
 def confirm_destructive_query(queries, keywords, alias):

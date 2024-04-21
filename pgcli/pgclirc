@@ -145,16 +145,16 @@ vi = False
 on_error = STOP
 
 # Set threshold for row limit. Use 0 to disable limiting.
-row_limit = 1000
+row_limit = 0
 
 # Truncate long text fields to this value for tabular display (does not apply to csv).
 # Leave unset to disable truncation. Example: "max_field_width = "
 # Be aware that formatting might get slow with values larger than 500 and tables with
 # lots of records.
-max_field_width = 500
+max_field_width = 
 
 # Skip intro on startup and goodbye on exit
-less_chatty = False
+less_chatty = True
 
 # Show all Postgres error fields (as listed in
 # https://www.postgresql.org/docs/current/protocol-error-fields.html).
@@ -189,7 +189,7 @@ null_string = '<null>'
 enable_pager = True
 
 # Use keyring to automatically save and load password in a secure manner
-keyring = True
+keyring = False
 
 # Custom colors for the completion menu, toolbar, etc.
 [colors]

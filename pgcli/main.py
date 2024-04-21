@@ -1,6 +1,10 @@
+import csv
+import json
+import subprocess
 from configobj import ConfigObj, ParseError
 from pgspecial.namedqueries import NamedQueries
-from .config import skip_initial_comment
+from pgcli.config import skip_initial_comment
+
 
 import atexit
 import os
@@ -20,7 +24,7 @@ from typing import Optional
 from cli_helpers.tabular_output import TabularOutputFormatter
 from cli_helpers.tabular_output.preprocessors import align_decimals, format_numbers
 from cli_helpers.utils import strip_ansi
-from .explain_output_formatter import ExplainOutputFormatter
+from pgcli.explain_output_formatter import ExplainOutputFormatter
 import click
 
 try:
@@ -46,13 +50,13 @@ from pygments.lexers.sql import PostgresLexer
 from pgspecial.main import PGSpecial, NO_QUERY, PAGER_OFF, PAGER_LONG_OUTPUT
 import pgspecial as special
 
-from . import auth
-from .pgcompleter import PGCompleter
-from .pgtoolbar import create_toolbar_tokens_func
-from .pgstyle import style_factory, style_factory_output
-from .pgexecute import PGExecute
-from .completion_refresher import CompletionRefresher
-from .config import (
+from pgcli import auth
+from pgcli.pgcompleter import PGCompleter
+from pgcli.pgtoolbar import create_toolbar_tokens_func
+from pgcli.pgstyle import style_factory, style_factory_output
+from pgcli.pgexecute import PGExecute
+from pgcli.completion_refresher import CompletionRefresher
+from pgcli.config import (
     get_casing_file,
     load_config,
     config_location,
@@ -60,12 +64,12 @@ from .config import (
     get_config,
     get_config_filename,
 )
-from .key_bindings import pgcli_bindings
-from .packages.formatter.sqlformatter import register_new_formatter
-from .packages.prompt_utils import confirm, confirm_destructive_query
-from .packages.parseutils import is_destructive
-from .packages.parseutils import parse_destructive_warning
-from .__init__ import __version__
+from pgcli.key_bindings import pgcli_bindings
+from pgcli.packages.formatter.sqlformatter import register_new_formatter
+from pgcli.packages.prompt_utils import confirm, confirm_destructive_query
+from pgcli.packages.parseutils import is_destructive
+from pgcli.packages.parseutils import parse_destructive_warning
+from pgcli.__init__ import __version__
 
 click.disable_unicode_literals_warning = True
 
@@ -90,6 +94,7 @@ except ImportError:
 # Ref: https://stackoverflow.com/questions/30425105/filter-special-chars-such-as-color-codes-from-shell-output
 COLOR_CODE_REGEX = re.compile(r"\x1b(\[.*?[@-~]|\].*?(\x07|\x1b\\))")
 DEFAULT_MAX_FIELD_WIDTH = 500
+EDITOR_COMMAND = "code"
 
 # Query tuples are used for maintaining history
 MetaQuery = namedtuple(
@@ -121,7 +126,7 @@ OutputSettings.__new__.__defaults__ = (
     None,
     lambda x: x,
     None,
-    DEFAULT_MAX_FIELD_WIDTH,
+    None,
 )
 
 
@@ -182,6 +187,8 @@ class PGCli:
         auto_vertical_output=False,
         warn=None,
         ssh_tunnel_url: Optional[str] = None,
+        project=None,
+        env=None,
     ):
         self.force_passwd_prompt = force_passwd_prompt
         self.never_passwd_prompt = never_passwd_prompt
@@ -215,10 +222,7 @@ class PGCli:
         )
         self.expanded_output = c["main"].as_bool("expand")
         self.pgspecial.timing_enabled = c["main"].as_bool("timing")
-        if row_limit is not None:
-            self.row_limit = row_limit
-        else:
-            self.row_limit = c["main"].as_int("row_limit")
+        self.row_limit = None
 
         self.application_name = application_name
 
@@ -262,7 +266,7 @@ class PGCli:
         self.on_error = c["main"]["on_error"].upper()
         self.decimal_format = c["data_formats"]["decimal"]
         self.float_format = c["data_formats"]["float"]
-        auth.keyring_initialize(c["main"].as_bool("keyring"), logger=self.logger)
+        # auth.keyring_initialize(c["main"].as_bool("keyring"), logger=self.logger)
         self.show_bottom_toolbar = c["main"].as_bool("show_bottom_toolbar")
 
         self.pgspecial.pset_pager(
@@ -309,6 +313,8 @@ class PGCli:
         self.ssh_tunnel_config = c.get("ssh tunnels")
         self.ssh_tunnel_url = ssh_tunnel_url
         self.ssh_tunnel = None
+        self.project = project
+        self.env = env
 
         # formatter setup
         self.formatter = TabularOutputFormatter(format_name=c["main"]["table_format"])
@@ -797,7 +803,11 @@ class PGCli:
                 elif destroy:
                     click.secho("Your call!")
 
+            if text.lower().startswith("select"):
+                text = f"SELECT row_to_json(r) FROM ({text}) r"
+
             output, query = self._evaluate_command(text)
+
         except KeyboardInterrupt:
             if self.destructive_warning_restarts_connection:
                 # Restart connection to the database
@@ -904,16 +914,13 @@ class PGCli:
 
         history_file = self.config["main"]["history_file"]
         if history_file == "default":
-            history_file = config_location() + "history"
+            history_file = f"{config_location()}history"
+
+        history_file += f"_{self.project}"
         history = FileHistory(os.path.expanduser(history_file))
         self.refresh_completions(history=history, persist_priorities="none")
 
         self.prompt_app = self._build_cli(history)
-
-        if not self.less_chatty:
-            print("Server: PostgreSQL", self.pgexecute.server_version)
-            print("Version:", __version__)
-            print("Home: http://pgcli.com")
 
         try:
             while True:
@@ -1051,20 +1058,6 @@ class PGCli:
 
             return prompt_app
 
-    def _should_limit_output(self, sql, cur):
-        """returns True if the output should be truncated, False otherwise."""
-        if self.explain_mode:
-            return False
-        if not is_select(sql):
-            return False
-
-        return (
-            not self._has_limit(sql)
-            and self.row_limit != 0
-            and cur
-            and cur.rowcount > self.row_limit
-        )
-
     def _has_limit(self, sql):
         if not sql:
             return False
@@ -1116,8 +1109,18 @@ class PGCli:
             logger.debug("rows: %r", cur)
             logger.debug("status: %r", status)
 
-            if self._should_limit_output(sql, cur):
-                cur, status = self._limit_output(cur)
+            if text.lower().startswith("select"):
+                tmp_file = "/tmp/db.json"
+                file_output = [x[0] for x in (cur.fetchall())]
+                file_output = ",".join(file_output)
+                file_output = f"[{file_output}]"
+                file_output = json.dumps(json.loads(file_output), indent=4)
+
+                with open(tmp_file, "w") as f:
+                    f.write(file_output)
+
+                subprocess.run([EDITOR_COMMAND, tmp_file])
+                continue
 
             if self.pgspecial.auto_expand or self.auto_expand:
                 max_width = self.prompt_app.output.get_size().columns
@@ -1310,48 +1313,30 @@ class PGCli:
             click.echo_via_pager(text, color)
 
 
+def read_in_csv_with_header_to_list_of_dict(file_path):
+    content = []
+    with open(file_path) as csv_file:
+        csv_reader = csv.reader(csv_file)
+        headers = next(csv_reader)
+
+        for row in csv_reader:
+            if not row:
+                continue
+            if len(row) != len(headers):
+                print("row", row, "doesn't contain all headers in csv")
+                exit(1)
+            row_data = {key: value for key, value in zip(headers, row)}
+            content.append(row_data)
+
+    return content
+
+
 @click.command()
 # Default host is '' so psycopg can default to either localhost or unix socket
-@click.option(
-    "-h",
-    "--host",
-    default="",
-    envvar="PGHOST",
-    help="Host address of the postgres database.",
-)
-@click.option(
-    "-p",
-    "--port",
-    default=5432,
-    help="Port number at which the " "postgres instance is listening.",
-    envvar="PGPORT",
-    type=click.INT,
-)
-@click.option(
-    "-U",
-    "--username",
-    "username_opt",
-    help="Username to connect to the postgres database.",
-)
-@click.option(
-    "-u", "--user", "username_opt", help="Username to connect to the postgres database."
-)
-@click.option(
-    "-W",
-    "--password",
-    "prompt_passwd",
-    is_flag=True,
-    default=False,
-    help="Force password prompt.",
-)
-@click.option(
-    "-w",
-    "--no-password",
-    "never_prompt",
-    is_flag=True,
-    default=False,
-    help="Never prompt for password.",
-)
+
+
+@click.option("--project", "--proj", default=None, nargs=1)
+@click.option("--env", default="local", nargs=1)
 @click.option(
     "--single-connection",
     "single_connection",
@@ -1360,7 +1345,6 @@ class PGCli:
     help="Do not use a separate connection for completions.",
 )
 @click.option("-v", "--version", is_flag=True, help="Version of pgcli.")
-@click.option("-d", "--dbname", "dbname_opt", help="database name to connect to.")
 @click.option(
     "--pgclirc",
     default=config_location() + "config",
@@ -1382,24 +1366,10 @@ class PGCli:
     help="list of DSN configured into the [alias_dsn] section of pgclirc file.",
 )
 @click.option(
-    "--row-limit",
-    default=None,
-    envvar="PGROWLIMIT",
-    type=click.INT,
-    help="Set threshold for row limit prompt. Use 0 to disable prompt.",
-)
-@click.option(
     "--application-name",
     default="pgcli",
     envvar="PGAPPNAME",
     help="Application name for the connection.",
-)
-@click.option(
-    "--less-chatty",
-    "less_chatty",
-    is_flag=True,
-    default=False,
-    help="Skip intro on startup and goodbye on exit.",
 )
 @click.option("--prompt", help='Prompt format (Default: "\\u@\\h:\\d> ").')
 @click.option(
@@ -1428,24 +1398,12 @@ class PGCli:
     default=None,
     help="Open an SSH tunnel to the given address and connect to the database from it.",
 )
-@click.argument("dbname", default=lambda: None, envvar="PGDATABASE", nargs=1)
-@click.argument("username", default=lambda: None, envvar="PGUSER", nargs=1)
 def cli(
-    dbname,
-    username_opt,
-    host,
-    port,
-    prompt_passwd,
-    never_prompt,
     single_connection,
-    dbname_opt,
-    username,
     version,
     pgclirc,
     dsn,
-    row_limit,
     application_name,
-    less_chatty,
     prompt,
     prompt_dsn,
     list_databases,
@@ -1453,6 +1411,8 @@ def cli(
     list_dsn,
     warn,
     ssh_tunnel: str,
+    project: str,
+    env: str,
 ):
     if version:
         print("Version:", __version__)
@@ -1461,6 +1421,47 @@ def cli(
     config_dir = os.path.dirname(config_location())
     if not os.path.exists(config_dir):
         os.makedirs(config_dir)
+
+    csv_config = read_in_csv_with_header_to_list_of_dict(
+        os.path.expanduser("~/.cust_db_cli_config.csv")
+    )
+    if project is None:
+        cur_dir = os.getcwd()
+        try:
+            project_row = next((x for x in csv_config if x["path"] in cur_dir), None)
+        except Exception as E:
+            for row in csv_config:
+                if "path" not in row:
+                    print(row)
+            raise E
+        if project_row is None:
+            print(
+                "No project var given or project found related to this path, aborting"
+            )
+            sys.exit(1)
+
+        project = project_row["project"]
+
+    print("project", project)
+    print("env", env)
+
+    found_row = next(
+        (x for x in csv_config if x["env"] == env and x["project"] == project), None
+    )
+
+    if found_row is None:
+        print(f"No config found for project: {project} env: {env}")
+        sys.exit(1)
+
+    database = found_row["db_url"]
+
+    """
+    If no --project flag then use the calling code's dir to reason about what the project should be
+    If no --env flag then default to local DB
+    If no --ide flag then default to code
+    Use some config CSV file not stored in the repo to store this info with "project,env,DB connection str"
+    # also some command version to list out all the different proj, env
+    """
 
     # Migrate the config file from old location.
     config_full_path = config_location() + "config"
@@ -1499,32 +1500,22 @@ def cli(
         exit(1)
 
     pgcli = PGCli(
-        prompt_passwd,
-        never_prompt,
+        False,
+        True,
         pgclirc_file=pgclirc,
-        row_limit=row_limit,
+        row_limit=None,
         application_name=application_name,
         single_connection=single_connection,
-        less_chatty=less_chatty,
+        less_chatty=True,
         prompt=prompt,
         prompt_dsn=prompt_dsn,
         auto_vertical_output=auto_vertical_output,
         warn=warn,
         ssh_tunnel_url=ssh_tunnel,
+        project=project,
+        env=env,
     )
 
-    # Choose which ever one has a valid value.
-    if dbname_opt and dbname:
-        # work as psql: when database is given as option and argument use the argument as user
-        username = dbname
-    database = dbname_opt or dbname or ""
-    user = username_opt or username
-    service = None
-    if database.startswith("service="):
-        service = database[8:]
-    elif os.getenv("PGSERVICE") is not None:
-        service = os.getenv("PGSERVICE")
-    # because option --list or -l are not supposed to have a db name
     if list_databases:
         database = "postgres"
 
@@ -1568,14 +1559,6 @@ def cli(
         pgcli.echo_via_pager("\n".join(formatted))
 
         sys.exit(0)
-
-    pgcli.logger.debug(
-        "Launch Params: \n" "\tdatabase: %r" "\tuser: %r" "\thost: %r" "\tport: %r",
-        database,
-        user,
-        host,
-        port,
-    )
 
     if setproctitle:
         obfuscate_process_password()
@@ -1718,7 +1701,7 @@ def format_output(title, cur, headers, status, settings, explain_mode=False):
     if explain_mode:
         formatter = ExplainOutputFormatter(max_width or 100)
     else:
-        formatter = TabularOutputFormatter(format_name=table_format)
+        formatter = TabularOutputFormatter(format_name="vertical")
 
     def format_array(val):
         if val is None:
@@ -1793,22 +1776,6 @@ def format_output(title, cur, headers, status, settings, explain_mode=False):
             formatted = iter(formatted.splitlines())
         first_line = next(formatted)
         formatted = itertools.chain([first_line], formatted)
-        if (
-            not explain_mode
-            and not expanded
-            and max_width
-            and len(strip_ansi(first_line)) > max_width
-            and headers
-        ):
-            formatted = formatter.format_output(
-                cur,
-                headers,
-                format_name="vertical",
-                column_types=column_types,
-                **output_kwargs,
-            )
-            if isinstance(formatted, str):
-                formatted = iter(formatted.splitlines())
 
         output = itertools.chain(output, formatted)
 

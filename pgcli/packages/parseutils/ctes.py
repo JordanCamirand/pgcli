@@ -2,7 +2,7 @@ from sqlparse import parse
 from sqlparse.tokens import Keyword, CTE, DML
 from sqlparse.sql import Identifier, IdentifierList, Parenthesis
 from collections import namedtuple
-from .meta import TableMetadata, ColumnMetadata
+from pgcli.packages.parseutils.meta import TableMetadata, ColumnMetadata
 
 
 # TableExpression is a namedtuple representing a CTE, used internally

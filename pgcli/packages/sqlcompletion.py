@@ -3,9 +3,13 @@ import re
 import sqlparse
 from collections import namedtuple
 from sqlparse.sql import Comparison, Identifier, Where
-from .parseutils.utils import last_word, find_prev_keyword, parse_partial_identifier
-from .parseutils.tables import extract_tables
-from .parseutils.ctes import isolate_query_ctes
+from pgcli.packages.parseutils.utils import (
+    last_word,
+    find_prev_keyword,
+    parse_partial_identifier,
+)
+from pgcli.packages.parseutils.tables import extract_tables
+from pgcli.packages.parseutils.ctes import isolate_query_ctes
 from pgspecial.main import parse_special_command
 
 

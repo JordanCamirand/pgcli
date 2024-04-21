@@ -2,7 +2,7 @@ import threading
 import os
 from collections import OrderedDict
 
-from .pgcompleter import PGCompleter
+from pgcli.pgcompleter import PGCompleter
 
 
 class CompletionRefresher:
