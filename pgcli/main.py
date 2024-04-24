@@ -189,6 +189,7 @@ class PGCli:
         ssh_tunnel_url: Optional[str] = None,
         project=None,
         env=None,
+        ide=None,
     ):
         self.force_passwd_prompt = force_passwd_prompt
         self.never_passwd_prompt = never_passwd_prompt
@@ -315,6 +316,7 @@ class PGCli:
         self.ssh_tunnel = None
         self.project = project
         self.env = env
+        self.ide = ide
 
         # formatter setup
         self.formatter = TabularOutputFormatter(format_name=c["main"]["table_format"])
@@ -1097,7 +1099,7 @@ class PGCli:
         res = self.pgexecute.run(
             text,
             self.pgspecial,
-            lambda x: exception_formatter(x, self.verbose_errors),
+            lambda x: exception_formatter(x, False),
             on_error_resume,
             explain_mode=self.explain_mode,
         )
@@ -1109,9 +1111,18 @@ class PGCli:
             logger.debug("rows: %r", cur)
             logger.debug("status: %r", status)
 
+            if cur is None and not success:
+                click.secho(status)
+                continue
+
             if text.lower().startswith("select"):
+                results = cur.fetchall()
+                if len(results) == 0:
+                    click.secho("No rows.", fg="red")
+                    continue
+
                 tmp_file = "/tmp/db.json"
-                file_output = [x[0] for x in (cur.fetchall())]
+                file_output = [x[0] for x in results]
                 file_output = ",".join(file_output)
                 file_output = f"[{file_output}]"
                 file_output = json.dumps(json.loads(file_output), indent=4)
@@ -1119,7 +1130,7 @@ class PGCli:
                 with open(tmp_file, "w") as f:
                     f.write(file_output)
 
-                subprocess.run([EDITOR_COMMAND, tmp_file])
+                subprocess.run([self.ide, tmp_file])
                 continue
 
             if self.pgspecial.auto_expand or self.auto_expand:
@@ -1398,6 +1409,11 @@ def read_in_csv_with_header_to_list_of_dict(file_path):
     default=None,
     help="Open an SSH tunnel to the given address and connect to the database from it.",
 )
+@click.option(
+    "--ide",
+    default=EDITOR_COMMAND,
+    help="default IDE to open up tmp json output file",
+)
 def cli(
     single_connection,
     version,
@@ -1413,6 +1429,7 @@ def cli(
     ssh_tunnel: str,
     project: str,
     env: str,
+    ide: str,
 ):
     if version:
         print("Version:", __version__)
@@ -1514,6 +1531,7 @@ def cli(
         ssh_tunnel_url=ssh_tunnel,
         project=project,
         env=env,
+        ide=ide,
     )
 
     if list_databases:
